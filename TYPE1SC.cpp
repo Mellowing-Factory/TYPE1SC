@@ -4,10 +4,16 @@
  * @Author Rooney.Jang  [CodeZoo]
  * @Date 05/06/2021
  *
+ * @Contributor Joon Lee [Mellowing-Factory]
+ * changed readATresponseLineOmitOK command so when response from server is delayed, ESP32 is not triggering watchdog
+ * @Date 07/10/2025
+ * 
  */
 
 #include "TYPE1SC.h"
 #include "Arduino.h"
+#include "esp_system.h" // For esp_task_wdt_reset()
+#include "esp_task_wdt.h" // For esp_task_wdt_reset()
 
 extern "C" {
 #include "stdlib.h"
@@ -951,7 +957,7 @@ int TYPE1SC::AWSIOT_UnSUBSCRIBE(char *topic) {
 int TYPE1SC::AWSIOT_Publish(char *topic, char *Data) {
 	char szCmd[512];
 	char resBuffer[512];
-	char clientTopic[128];
+	char clientTopic[256];
 	char clientData[512];
 
 	memset(clientTopic, 0x0, sizeof(clientTopic));
@@ -1897,70 +1903,187 @@ int TYPE1SC::sendATcmd(char *szCmd, char *aLine[], int nMaxLine,
 	return nRet;
 }
 
+// int TYPE1SC::readATresponseLineOmitOK(char *szLine, int nLineBufSize,
+// 		const char *szResponseFilter,
+// 		unsigned long ulDelay) {
+// 	int nbLine = 0;
+// 	char *aLine[BG_LINE];
+// 	Countdown oCountdown(ulDelay);
+// 	char *pszSubstr = NULL;
+// 	int nRet = 3;
+
+// 	memset(szLine, 0, nLineBufSize);
+
+// 	do {
+// 		if (_serial.available()) {
+// 			String sStr;
+// 			sStr = _serial.readStringUntil('\n');
+// 			int nLen = sStr.length();
+
+// 			if (nLen > 1) {
+// 				aLine[nbLine] = (char *)malloc(nLen + 1);
+// 				sStr.toCharArray(aLine[nbLine], nLen);
+// 				aLine[nbLine][nLen] = 0;
+
+// 				pszSubstr = strstr(aLine[nbLine], szResponseFilter);
+// 				if (pszSubstr != NULL) {
+// 					SWIR_TRACE(F("Found OK"));
+// 					pszSubstr += strlen(szResponseFilter);
+// 					while (isSpace(*pszSubstr)) // trim heading
+// 					{
+// 						pszSubstr++;
+// 					}
+// 					char *pTemp = pszSubstr;
+// 					while (pTemp < (aLine[nbLine] + strlen(aLine[nbLine]))) // trim ending
+// 					{
+// 						if (*pTemp == '\n') // remove cariage return
+// 						{
+// 							*pTemp = 0; // zero terminate string
+// 							break;
+// 						}
+// 						pTemp++;
+// 					}
+// 					SWIR_TRACE(F("Filtered response: %s\n"), pszSubstr);
+// 					strcpy(szLine, pszSubstr);
+// 					nbLine++;
+// 					nRet = 0;
+// 					break;
+// 				}
+
+// 				nbLine++;
+// 			}
+// 		}
+// 		if (nbLine >= BG_LINE) {
+// 			break;
+// 		}
+// 	} while (!oCountdown.expired());
+
+// 	SWIR_TRACE(F("readATresponseLine: %d line(s)\n"), nbLine);
+
+// 	int i;
+// 	for (i = 0; i < nbLine; i++) {
+// 		SWIR_TRACE(F("line[%d]: %s\n"), i, aLine[i]);
+// 		free(aLine[i]);
+// 	}
+
+// 	return nRet;
+// }
+
 int TYPE1SC::readATresponseLineOmitOK(char *szLine, int nLineBufSize,
-		const char *szResponseFilter,
-		unsigned long ulDelay) {
-	int nbLine = 0;
-	char *aLine[BG_LINE];
-	Countdown oCountdown(ulDelay);
-	char *pszSubstr = NULL;
-	int nRet = 3;
+                                     const char *szResponseFilter,
+                                     unsigned long ulDelay) {
+    int nbLine = 0;
+    char *aLine[BG_LINE];
+    Countdown oCountdown(ulDelay); // This will manage the overall timeout
+    char *pszSubstr = NULL;
+    int nRet = 3; // Default to error
 
-	memset(szLine, 0, nLineBufSize);
+    memset(szLine, 0, nLineBufSize);
 
-	do {
-		if (_serial.available()) {
-			String sStr;
-			sStr = _serial.readStringUntil('\n');
-			int nLen = sStr.length();
+    // --- Start of Manual Line Reading Loop ---
+    char currentLineBuffer[nLineBufSize]; // Temporary buffer for the current line
+    int currentLineIndex = 0;
+    memset(currentLineBuffer, 0, sizeof(currentLineBuffer));
 
-			if (nLen > 1) {
-				aLine[nbLine] = (char *)malloc(nLen + 1);
-				sStr.toCharArray(aLine[nbLine], nLen);
-				aLine[nbLine][nLen] = 0;
+    do {
+        // Feed the watchdog on every iteration of this main loop
+        esp_task_wdt_reset();
+        // Always yield to other tasks to prevent CPU starvation
+        vTaskDelay(pdMS_TO_TICKS(10));
 
-				pszSubstr = strstr(aLine[nbLine], szResponseFilter);
-				if (pszSubstr != NULL) {
-					SWIR_TRACE(F("Found OK"));
-					pszSubstr += strlen(szResponseFilter);
-					while (isSpace(*pszSubstr)) // trim heading
-					{
-						pszSubstr++;
-					}
-					char *pTemp = pszSubstr;
-					while (pTemp < (aLine[nbLine] + strlen(aLine[nbLine]))) // trim ending
-					{
-						if (*pTemp == '\n') // remove cariage return
-						{
-							*pTemp = 0; // zero terminate string
-							break;
-						}
-						pTemp++;
-					}
-					SWIR_TRACE(F("Filtered response: %s\n"), pszSubstr);
-					strcpy(szLine, pszSubstr);
-					nbLine++;
-					nRet = 0;
-					break;
-				}
+        while (_serial.available()) {
+            char c = _serial.read();
 
-				nbLine++;
-			}
-		}
-		if (nbLine >= BG_LINE) {
-			break;
-		}
-	} while (!oCountdown.expired());
+            // Handle potential buffer overflow for currentLineBuffer
+            if (currentLineIndex < sizeof(currentLineBuffer) - 1) {
+                currentLineBuffer[currentLineIndex++] = c;
+            } else {
+                // Buffer overflow, consider logging or handling this error
+                SWIR_TRACE(F("Line buffer overflow detected!\n"));
+                // You might want to reset the buffer or skip this line
+                currentLineIndex = 0; // Reset for next char sequence
+                memset(currentLineBuffer, 0, sizeof(currentLineBuffer));
+            }
 
-	SWIR_TRACE(F("readATresponseLine: %d line(s)\n"), nbLine);
+            if (c == '\n') { // End of line detected
+                currentLineBuffer[currentLineIndex] = '\0'; // Null-terminate the line
 
-	int i;
-	for (i = 0; i < nbLine; i++) {
-		SWIR_TRACE(F("line[%d]: %s\n"), i, aLine[i]);
-		free(aLine[i]);
-	}
+                // Process the received line
+                if (currentLineIndex > 1) { // Check if it's not just \r\n
+                    // Allocate memory and copy the line (similar to your original code)
+                    // Note: This part might need BG_LINE to be large enough, or dynamic reallocation
+                    if (nbLine < BG_LINE) { // Prevent aLine buffer overflow
+                         int nLen = strlen(currentLineBuffer);
+                         aLine[nbLine] = (char *)malloc(nLen + 1);
+                         if (aLine[nbLine] == NULL) {
+                             SWIR_TRACE(F("Memory allocation failed!\n"));
+                             // Handle memory allocation failure, e.g., break or return error
+                             // For now, break and clean up existing allocations
+                             nRet = 4; // Indicate memory error
+                             goto cleanup_and_exit;
+                         }
+                         strcpy(aLine[nbLine], currentLineBuffer);
+                         aLine[nbLine][nLen] = 0; // Ensure null-termination
 
-	return nRet;
+                        pszSubstr = strstr(aLine[nbLine], szResponseFilter);
+                        if (pszSubstr != NULL) {
+                            SWIR_TRACE(F("Found Filter Response\n"));
+                            // Existing trimming logic
+                            pszSubstr += strlen(szResponseFilter);
+                            while (isSpace(*pszSubstr)) {
+                                pszSubstr++;
+                            }
+                            char *pTemp = pszSubstr;
+                            while (pTemp < (aLine[nbLine] + strlen(aLine[nbLine]))) {
+                                if (*pTemp == '\n' || *pTemp == '\r') { // Remove both CR and LF
+                                    *pTemp = 0;
+                                    break;
+                                }
+                                pTemp++;
+                            }
+                            SWIR_TRACE(F("Filtered response: %s\n"), pszSubstr);
+                            // Ensure szLine buffer has enough space before copying
+                            if (strlen(pszSubstr) < nLineBufSize) {
+                                strcpy(szLine, pszSubstr);
+                            } else {
+                                SWIR_TRACE(F("szLine buffer too small for filtered response!\n"));
+                                strncpy(szLine, pszSubstr, nLineBufSize - 1);
+                                szLine[nLineBufSize - 1] = '\0';
+                            }
+                            nbLine++;
+                            nRet = 0; // Success
+                            goto cleanup_and_exit; // Exit the loop on success
+                        }
+
+                        nbLine++;
+                    } else {
+                        SWIR_TRACE(F("aLine buffer (BG_LINE) overflow detected!\n"));
+                        // Handle the case where too many lines are received without filter match
+                        // You might want to break here or continue freeing.
+                        // For now, continue to allow timeout to happen, but don't allocate more.
+                    }
+                }
+                // Reset for the next line
+                currentLineIndex = 0;
+                memset(currentLineBuffer, 0, sizeof(currentLineBuffer));
+            }
+        }
+    } while (!oCountdown.expired());
+    // --- End of Manual Line Reading Loop ---
+
+cleanup_and_exit: // Label for early exit and cleanup
+
+    SWIR_TRACE(F("readATresponseLine: %d line(s)\n"), nbLine);
+
+    // Free all dynamically allocated memory
+    for (int i = 0; i < nbLine; i++) {
+        if (aLine[i] != NULL) { // Check for NULL to prevent double free or invalid free
+            free(aLine[i]);
+            aLine[i] = NULL; // Good practice to nullify after freeing
+        }
+    }
+
+    return nRet;
 }
 
 int TYPE1SC::readATresponseHTTPLine(char *szLine, int nLineBufSize,
