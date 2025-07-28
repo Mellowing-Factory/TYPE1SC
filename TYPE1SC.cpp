@@ -823,7 +823,7 @@ int TYPE1SC::setAWSIOT_TIMEOUT(int value) {
 
 	TYPE1SC_serial_clearbuf();
 
-	sprintf(szCmd, "AT%%AWSIOTCFG=\"PROTOCOL\",%d,0", value);
+	sprintf(szCmd, "AT%%AWSIOTCFG=\"PROTOCOL\",%d,1", value);
 
 	ret = sendATcmd(szCmd, resBuffer, sizeof(resBuffer), "OK", 3000);
 
