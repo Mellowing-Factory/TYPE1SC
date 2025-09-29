@@ -839,7 +839,7 @@ int TYPE1SC::AWSIOT_Connect(void) {
 	sprintf(szCmd, "AT%%AWSIOTCMD=\"CONNECT\"");
 
 	if (0 == sendATcmdOmitOK(szCmd, resBuffer, sizeof(resBuffer), "\"CONCONF\"",
-				20000)) {
+				30000)) {
 		char *pszState = NULL;
 
 		pszState = strstr(resBuffer, ",");
@@ -895,7 +895,7 @@ int TYPE1SC::AWSIOT_SUBSCRIBE(char *topic) {
 	sprintf(szCmd, "AT%%AWSIOTCMD=\"SUBSCRIBE\",\"%s\"", clientTopic);
 
 	if (0 == sendATcmdOmitOK(szCmd, resBuffer, sizeof(resBuffer), "\"SUBCONF\"",
-				20000)) {
+				30000)) {
 		char *pszState = NULL;
 		char *pszState2 = NULL;
 
